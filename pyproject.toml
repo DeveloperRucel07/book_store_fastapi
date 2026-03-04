@@ -8,5 +8,7 @@ dependencies = [
     "aiosqlite",
     "fastapi",
     "fastapi-users[sqlalchemy]>=15.0.4",
+    "passlib[bcrypt]>=1.7.4",
+    "python-jose[cryptography]>=3.5.0",
     "uvicorn[standard]>=0.41.0",
 ]
