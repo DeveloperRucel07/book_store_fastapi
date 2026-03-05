@@ -3,7 +3,7 @@ from passlib.hash import argon2
 import hashlib
 from jose import jwt
 from datetime import datetime, timedelta
-from src.auth.models import User
+from src.models import User
 SECRET_KEY = "supersecretkey"
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 60

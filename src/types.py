@@ -1,12 +1,13 @@
+from datetime import datetime
 from typing import Optional
 from pydantic import BaseModel, Field
+from src.models import Book, UserRole, OrderStatus
 
 class UserType(BaseModel):
     email:str
     username:str
     password:str
-    role:str
-
+    role:UserRole
 
 class BookType(BaseModel):
     title:Optional[str] = Field(None, min_length=4)
@@ -14,8 +15,7 @@ class BookType(BaseModel):
     price:Optional[float]= None
     publishedYear: Optional[int]= None
     genre:Optional[str]= None
-
-    class config:
+    class Config:
         orm_mode = True
 
 class Token(BaseModel):
@@ -25,3 +25,23 @@ class Token(BaseModel):
 class LoginType(BaseModel):
     username:str
     password:str
+
+class LoggedUser(BaseModel):
+    username:str
+    email:str
+
+class OrderCreate(BaseModel):
+    book_id: int
+
+class OrderStatusUpdate(BaseModel):
+    status: OrderStatus
+
+class OrderResponse(BaseModel):
+    id: int
+    user: LoggedUser
+    book: BookType
+    status: OrderStatus
+    created_at: datetime
+    class Config:
+        from_attributes = True 
+

@@ -1,39 +1,36 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, Query
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from pydantic import BaseModel
 from database import engine
 from database import SessionLocal
 from fastapi import Depends, HTTPException, Response, Request, status
 from sqlalchemy.orm import Session
-from src.books import models as model_book
-from src.auth import tasks, security, dependencies, models
-from src.types import BookType, LoginType, UserType
-
-Book = model_book.Book
-models.Base.metadata.create_all(bind=engine)
-def get_db():
-    db = SessionLocal()
-    try:
-        yield db
-    finally:
-        db.close()
-
+from src.models import Book, Base
+from src.auth.tasks import get_user, create_user
+from src.auth.dependencies import get_current_user, get_user, require_roles
+from src.auth.security import hash_password, verify_password, create_access_token
+from src.types import BookType, LoginType, UserType, OrderCreate, OrderStatusUpdate, OrderResponse
+from src.orders.tasks import create_order, update_order, delete_order, list_orders, list_user_orders
+from src import models
+from database import get_db
+#Base.metadata.drop_all(bind=engine)
+Base.metadata.create_all(bind=engine)
 app = FastAPI()
 
 
-@app.post("/register")
+@app.post("/register/")
 def register(user:UserType, db: Session = Depends(get_db)):
 
-    hashed_password = security.hash_password(user.password)
-    user = tasks.create_user(db, user.username, user.email, hashed_password, user.role)
+    hashed_password = hash_password(user.password)
+    user = create_user(db, user.username, user.email, hashed_password, user.role)
     return {"username": user.username, "role": user.role, "email":user.email}
 
-@app.post("/login")
+@app.post("/login/")
 def login(form_data: LoginType, response: Response,  db: Session = Depends(get_db)):
-    user = tasks.get_user(db, form_data.username)
-    if not user or not security.verify_password(form_data.password, user.hashed_password):
+    user = get_user(db, form_data.username)
+    if not user or not verify_password(form_data.password, user.hashed_password):
         raise HTTPException(status_code=401, detail="Invalid credentials")
-    token = security.create_access_token({"sub": user.username, "role": user.role})
+    token =create_access_token({"sub": user.username, "role": user.role})
     response.set_cookie(
         key="access_token",
         value=token,
@@ -44,7 +41,7 @@ def login(form_data: LoginType, response: Response,  db: Session = Depends(get_d
     )
     return { "detail":"Login Sucessfully", "user":{"name":user.username, "role":user.role, "id":user.id}}
 
-@app.post("/logout")
+@app.post("/logout/")
 def logout(response: Response):
     response.delete_cookie("access_token")
     return {"message": "Logged out"}
@@ -58,7 +55,7 @@ async def get_books(db: Session = Depends(get_db)):
     return db.query(Book).all()
 
 @app.post("/books/")
-async def add_book(book: BookType, db: Session = Depends(get_db), current_user = Depends(dependencies.require_roles(["admin", "staff"]))):
+async def add_book(book: BookType, db: Session = Depends(get_db), current_user = Depends(require_roles(["admin", "staff"]))):
     db_book = Book(**book.model_dump(), owner_id=current_user.id)
     if book.title is not None:
         if not isinstance(book.title, str) or len(book.title) <= 3:
@@ -72,7 +69,7 @@ async def add_book(book: BookType, db: Session = Depends(get_db), current_user =
     return db_book
 
 @app.patch("/books/{book_id}")
-async def update_book(book_id: int, book: BookType, db: Session = Depends(get_db), current_user = Depends(dependencies.require_roles(["admin", "staff"]))):
+async def update_book(book_id: int, book: BookType, db: Session = Depends(get_db), current_user = Depends(require_roles(["admin", "staff"]))):
     book_dict = book.model_dump()
     db_book = db.query(Book).filter(Book.id == book_id).first()
     if db_book is None:
@@ -95,15 +92,13 @@ async def update_book(book_id: int, book: BookType, db: Session = Depends(get_db
 
     for key, value in update_data.items():
         setattr(db_book, key, value)
-
     db.commit()
     db.refresh(db_book)
-
     return db_book
 
 
 @app.delete("/books/{book_id}")
-def delete_book(book_id:int, db: Session = Depends(get_db), current_user = Depends(dependencies.require_roles(["admin", "staff"]))):
+def delete_book(book_id:int, db: Session = Depends(get_db), current_user = Depends(require_roles(["admin", "staff"]))):
     db_book = db.query(Book).filter(Book.id == book_id).first()
     if db_book is None:
         raise HTTPException(
@@ -112,7 +107,7 @@ def delete_book(book_id:int, db: Session = Depends(get_db), current_user = Depen
         )
     if db_book.owner_id != current_user.id and current_user.role != "admin":
         raise HTTPException(
-            status_code=403,
+            status_code=status.HTTP_403_FORBIDDEN,
             detail="Not authorized to delete this book"
         )
     db.delete(db_book)
@@ -120,8 +115,40 @@ def delete_book(book_id:int, db: Session = Depends(get_db), current_user = Depen
     return {"detail":"Book deleted successfully"}
 
 
+###########Orders###########
+@app.get("/orders/", response_model=list[OrderResponse])
+def list_all_order(db: Session= Depends(get_db), skip:int = Query(0, ge=0), limit:int = Query(20, le=100), current_user = Depends(require_roles(["staff"]))):
+    if current_user.role != "staff":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Not authorized sees this list"
+        )
+    return list_orders(db, skip, limit)
+
+@app.get("/orders/my_orders/", response_model=list[OrderResponse])
+def list_all_user_order(current_user = Depends(get_current_user), db: Session= Depends(get_db), skip:int = Query(0, ge=0), limit:int = Query(20, le=100)):
+    return list_user_orders(user_id=current_user.id, db=db, skip=skip, limit=limit)
+
+@app.post("/orders/", response_model=OrderResponse)
+def bought_book(order: OrderCreate, db:Session= Depends(get_db), current_user = Depends(get_current_user)):
+    return create_order(db, user_id=current_user.id, book_id=order.book_id)
+
+@app.patch("orders/{order_id}/status/")
+def update_order_status(order_id:int, data: OrderStatusUpdate, db: Session = Depends(get_db), current_user = Depends(get_current_user)):
+    try:
+        return update_order(db, order_id=order_id, status = data.status, user = current_user)
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="An error appied during the process! Please try again later")
+
+@app.delete("/orders/{order_id}")
+def order_delele(order_id, db: Session = Depends(get_db), current_user = Depends(require_roles(['staff']))):
+    return delete_order(db, order_id)
+
+
+
+
 @app.get("/protected")
-def protected_route(current_user = Depends(dependencies.require_roles(["admin", "staff"]))):
+def protected_route(current_user = Depends(require_roles(["admin", "staff"]))):
     return {
         "message": "You are authenticated",
         "username": current_user.username,

@@ -1,6 +1,6 @@
 from pydantic import BaseModel, field_validator
 
-from .models import User
+from src.models import User, UserRole
 from sqlalchemy.orm import Session
 
 
