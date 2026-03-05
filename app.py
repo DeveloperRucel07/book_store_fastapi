@@ -5,11 +5,12 @@ from database import engine
 from database import SessionLocal
 from fastapi import Depends, HTTPException, Response, Request, status
 from sqlalchemy.orm import Session
-from src.models import Book, Base
+from src.models import Book, Base, Like, User
 from src.auth.tasks import get_user, create_user
 from src.auth.dependencies import get_current_user, get_user, require_roles
 from src.auth.security import hash_password, verify_password, create_access_token
-from src.types import BookType, LoginType, UserType, OrderCreate, OrderStatusUpdate, OrderResponse
+from src.types import BookType, LoginType, UserType, OrderCreate, OrderStatusUpdate, OrderResponse, BookResponse
+from src.books.tasks import get_book
 from src.orders.tasks import create_order, update_order, delete_order, list_orders, list_user_orders
 from src import models
 from database import get_db
@@ -97,7 +98,12 @@ async def update_book(book_id: int, book: BookType, db: Session = Depends(get_db
     return db_book
 
 
-@app.delete("/books/{book_id}")
+@app.get("/books/{book_id}/", response_model=BookResponse)
+async def detail_book(book_id:int, db: Session = Depends(get_db)):
+    return get_book(book_id=book_id, db=db )
+
+
+@app.delete("/books/{book_id}/")
 def delete_book(book_id:int, db: Session = Depends(get_db), current_user = Depends(require_roles(["admin", "staff"]))):
     db_book = db.query(Book).filter(Book.id == book_id).first()
     if db_book is None:
@@ -133,10 +139,10 @@ def list_all_user_order(current_user = Depends(get_current_user), db: Session= D
 def bought_book(order: OrderCreate, db:Session= Depends(get_db), current_user = Depends(get_current_user)):
     return create_order(db, user_id=current_user.id, book_id=order.book_id)
 
-@app.patch("orders/{order_id}/status/")
-def update_order_status(order_id:int, data: OrderStatusUpdate, db: Session = Depends(get_db), current_user = Depends(get_current_user)):
+@app.patch("/orders/{order_id}/status/")
+async def update_order_status(order_id:int, data: OrderStatusUpdate, db: Session = Depends(get_db), current_user = Depends(get_current_user)):
     try:
-        return update_order(db, order_id=order_id, status = data.status, user = current_user)
+        return update_order(db, order_id=order_id, new_status = data.status, user = current_user)
     except ValueError as e:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="An error appied during the process! Please try again later")
 
@@ -144,18 +150,32 @@ def update_order_status(order_id:int, data: OrderStatusUpdate, db: Session = Dep
 def order_delele(order_id, db: Session = Depends(get_db), current_user = Depends(require_roles(['staff']))):
     return delete_order(db, order_id)
 
-
+##########LIKE############
+@app.post("/books/{book_id}/like")
+def toogle_like(book_id:int, db:Session = Depends(get_db), current_user:User = Depends(get_current_user)):
+    book = db.query(Book).filter_by(id=book_id).first()
+    if not book:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Book not found")
+    like = db.query(Like).filter_by(user_id=current_user.id, book_id=book_id).first()
+    if like:
+        db.delete(like)
+        db.commit()
+        return {"detail": "Like removed", "total_likes": db.query(Like).filter_by(book_id=book_id).count() }
+    else:
+        new_like = Like(user_id=current_user.id, book_id=book_id)
+        db.add(new_like)
+        try:
+            db.commit()
+        except:
+            db.rollback()
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Could not like the book, please try again later")
+        return {"detail": "Book liked", "total_likes": db.query(Like).filter_by(book_id=book_id).count() }
 
 
 @app.get("/protected")
-def protected_route(current_user = Depends(require_roles(["admin", "staff"]))):
+def protected_route(current_user:User = Depends(require_roles(["admin", "staff"]))):
     return {
         "message": "You are authenticated",
         "username": current_user.username,
         "role": current_user.role
     }
-
-
-@app.get("/books/{book_id}")
-async def detail_book(book_id:int):
-    return {"book": f"this book has a id {book_id}"}

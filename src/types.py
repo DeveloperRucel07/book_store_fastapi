@@ -17,6 +17,16 @@ class BookType(BaseModel):
     genre:Optional[str]= None
     class Config:
         orm_mode = True
+        from_attributes = True 
+
+class BookResponse(BookType):
+    id: int
+    owner_id: int
+    created_at: datetime
+    updated_at: datetime
+
+    class Config:
+        orm_mode = True
 
 class Token(BaseModel):
     access_token: str
