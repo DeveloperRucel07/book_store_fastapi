@@ -10,7 +10,7 @@ from src.auth.tasks import get_user, create_user
 from src.auth.dependencies import get_current_user, get_user, require_roles
 from src.auth.security import hash_password, verify_password, create_access_token
 from src.types import BookType, LoginType, UserType, OrderCreate, OrderStatusUpdate, OrderResponse, BookResponse
-from src.books.tasks import get_book
+from src.books.tasks import get_book, get_all_books, create_book, book_update, book_deleted
 from src.orders.tasks import create_order, update_order, delete_order, list_orders, list_user_orders
 from src import models
 from database import get_db
@@ -51,51 +51,17 @@ def logout(response: Response):
 def home():
     return {"message":"Hello and welcome to my bookstore"}
 
-@app.get("/books/", response_model=list[BookType], status_code=200)
+@app.get("/books/", response_model=list[BookResponse], status_code=200)
 async def get_books(db: Session = Depends(get_db)):
-    return db.query(Book).all()
+    return get_all_books(db)
 
 @app.post("/books/")
 async def add_book(book: BookType, db: Session = Depends(get_db), current_user = Depends(require_roles(["admin", "staff"]))):
-    db_book = Book(**book.model_dump(), owner_id=current_user.id)
-    if book.title is not None:
-        if not isinstance(book.title, str) or len(book.title) <= 3:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Book name must be more than 3 characters"
-            )
-    db.add(db_book)
-    db.commit()
-    db.refresh(db_book)
-    return db_book
+    return create_book(book, current_user, db)
 
-@app.patch("/books/{book_id}")
+@app.patch("/books/{book_id}/")
 async def update_book(book_id: int, book: BookType, db: Session = Depends(get_db), current_user = Depends(require_roles(["admin", "staff"]))):
-    book_dict = book.model_dump()
-    db_book = db.query(Book).filter(Book.id == book_id).first()
-    if db_book is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Book not found"
-        )
-    if book.title is not None:
-        if not isinstance(book.title, str) or len(book.title) <= 3:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Book title must be more than 3 characters"
-            )
-    if db_book.owner_id != current_user.id and current_user.role != "admin":
-        raise HTTPException(
-            status_code=403,
-            detail="Not authorized to delete this book"
-        )
-    update_data = book.model_dump(exclude_unset=True)
-
-    for key, value in update_data.items():
-        setattr(db_book, key, value)
-    db.commit()
-    db.refresh(db_book)
-    return db_book
+    return book_update(book_id, current_user, db, book )
 
 
 @app.get("/books/{book_id}/", response_model=BookResponse)
@@ -105,20 +71,7 @@ async def detail_book(book_id:int, db: Session = Depends(get_db)):
 
 @app.delete("/books/{book_id}/")
 def delete_book(book_id:int, db: Session = Depends(get_db), current_user = Depends(require_roles(["admin", "staff"]))):
-    db_book = db.query(Book).filter(Book.id == book_id).first()
-    if db_book is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Book not found"
-        )
-    if db_book.owner_id != current_user.id and current_user.role != "admin":
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Not authorized to delete this book"
-        )
-    db.delete(db_book)
-    db.commit()
-    return {"detail":"Book deleted successfully"}
+    return book_deleted(current_user, db, book_id)
 
 
 ###########Orders###########

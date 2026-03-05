@@ -24,6 +24,7 @@ class BookResponse(BookType):
     owner_id: int
     created_at: datetime
     updated_at: datetime
+    likes_count:int
 
     class Config:
         orm_mode = True
